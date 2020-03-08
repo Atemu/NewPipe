@@ -128,6 +128,7 @@
     <string name="settings_category_other_title">Other</string>
     <string name="settings_category_debug_title">Debug</string>
     <string name="settings_category_updates_title">Updates</string>
+    <string name="settings_category_sponsorblock">SponsorBlock (beta)</string>
     <string name="background_player_playing_toast">Playing in background</string>
     <string name="popup_playing_toast">Playing in popup mode</string>
     <string name="background_player_append">Queued on background player</string>
@@ -175,6 +176,7 @@
     <string name="switch_to_background">Switch to Background</string>
     <string name="switch_to_popup">Switch to Popup</string>
     <string name="switch_to_main">Switch to Main</string>
+    <string name="submit_sponsor_times">Submit Sponsor Times</string>
     <string name="import_data_title">Import database</string>
     <string name="export_data_title">Export database</string>
     <string name="import_data_summary">Overrides your current history and subscriptions</string>
@@ -637,4 +639,5 @@
     <string name="feed_use_dedicated_fetch_method_enable_button">Enable fast mode</string>
     <string name="feed_use_dedicated_fetch_method_disable_button">Disable fast mode</string>
     <string name="feed_use_dedicated_fetch_method_help_text">Do you think feed loading is too slow? If so, try enabling fast loading (you can change it in settings or by pressing the button below).\n\nNewPipe offers two feed loading strategies:\n• Fetching the whole subscription channel, which is slow but complete.\n• Using a dedicated service endpoint, which is fast but usually not complete.\n\nThe difference between the two is that the fast one usually lacks some information, like the item\'s duration or type (can\'t distinguish between live videos and normal ones) and it may return less items.\n\nYouTube is an example of a service that offers this fast method with its RSS feed.\n\nSo the choice boils down to what you prefer: speed or precise information.</string>
+    <string name="sponsorblock_skipped_sponsor">Sponsor skipped</string>
 </resources>
