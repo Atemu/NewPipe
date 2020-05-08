@@ -597,7 +597,7 @@ public final class MainVideoPlayer extends AppCompatActivity
             this.muteButton = view.findViewById(R.id.switchMute);
             this.switchPopupButton = view.findViewById(R.id.switchPopup);
 
-            this.submitSponsorTimesButton = rootView.findViewById(R.id.submitSponsorTimes);
+            this.submitSponsorTimesButton = view.findViewById(R.id.submitSponsorTimes);
             this.submitSponsorTimesButton.setTag(false);
             this.submitSponsorTimesButton.setOnLongClickListener(v -> {
                     onSponsorBlockButtonLongClicked();
