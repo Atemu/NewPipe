@@ -11,7 +11,7 @@ import androidx.appcompat.widget.AppCompatSeekBar;
 
 import java.util.ArrayList;
 
-public class MarkableSeekBar extends AppCompatSeekBar {
+public class MarkableSeekBar extends FocusAwareSeekBar {
     public ArrayList<SeekBarMarker> seekBarMarkers = new ArrayList<>();
     private RectF markerRect = new RectF();
 
