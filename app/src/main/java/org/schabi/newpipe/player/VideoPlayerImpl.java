@@ -76,11 +76,13 @@ import com.google.android.exoplayer2.ui.SubtitleView;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.nostra13.universalimageloader.core.assist.FailReason;
 
+import org.jetbrains.annotations.NotNull;
 import org.schabi.newpipe.R;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.VideoStream;
 import org.schabi.newpipe.fragments.OnScrollBelowItemsListener;
 import org.schabi.newpipe.fragments.detail.VideoDetailFragment;
+import org.schabi.newpipe.player.event.DisplayPortion;
 import org.schabi.newpipe.player.event.PlayerEventListener;
 import org.schabi.newpipe.player.event.PlayerGestureListener;
 import org.schabi.newpipe.player.event.PlayerServiceEventListener;
@@ -101,6 +103,8 @@ import org.schabi.newpipe.util.ListHelper;
 import org.schabi.newpipe.util.NavigationHelper;
 import org.schabi.newpipe.util.ShareUtils;
 import org.schabi.newpipe.util.SponsorBlockMode;
+import org.schabi.newpipe.views.player.CircleClipTapView;
+import org.schabi.newpipe.views.player.PlayerSeekOverlay;
 
 import java.util.HashSet;
 import java.util.List;
@@ -224,6 +228,8 @@ public class VideoPlayerImpl extends VideoPlayer
     private float maximumHeight;
     // Popup end
 
+    private PlayerGestureListener gestureListener;
+    private PlayerSeekOverlay seekOverlay;
 
     @Override
     public void handleIntent(final Intent intent) {
@@ -318,6 +324,7 @@ public class VideoPlayerImpl extends VideoPlayer
         this.itemsList = view.findViewById(R.id.playQueue);
 
         this.playerOverlays = view.findViewById(R.id.player_overlays);
+        this.seekOverlay = view.findViewById(R.id.seekOverlay);
 
         closingOverlayView = view.findViewById(R.id.closingOverlay);
 
@@ -461,13 +468,102 @@ public class VideoPlayerImpl extends VideoPlayer
         }
     }
 
+    private void setupPlayerSeekOverlay() {
+        final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        final String key = context.getString(R.string.seek_duration_key);
+        final String value = prefs
+            .getString(key, context.getString(R.string.seek_duration_default_value));
+
+        final int seekDurationInMillis = Integer.parseInt(value);
+        final int fadeDurations = 450;
+
+        seekOverlay.showCircle(true)
+            .circleBackgroundColorInt(CircleClipTapView.COLOR_DARK)
+            .seekSeconds(seekDurationInMillis / 1000)
+            .performListener(new PlayerSeekOverlay.PerformListener() {
+
+                boolean keepShadow = false;
+
+                @Override
+                public void onPrepare() {
+                    if (getPlayer().getPlaybackState() == Player.STATE_IDLE
+                        || getPlayer().getPlaybackState() == Player.STATE_ENDED) {
+                        gestureListener.endMultiDoubleTap();
+                        return;
+                    }
+
+                    keepShadow = !getPlayer().getPlayWhenReady() && isControlsVisible();
+                    seekOverlay
+                        .arcSize(CircleClipTapView.Companion.calculateArcSize(getSurfaceView()))
+                        .circleBackgroundColorInt(
+                            keepShadow ? CircleClipTapView.COLOR_DARK_TRANSPARENT
+                                : CircleClipTapView.COLOR_DARK
+                        );
+                }
+
+                @Override
+                public void onAnimationStart() {
+                    animateView(seekOverlay, true, fadeDurations);
+                    hideControls(fadeDurations, 0, keepShadow);
+                }
+
+                @Override
+                public void onAnimationEnd() {
+                    animateView(seekOverlay, false, fadeDurations);
+                    if (!getPlayer().getPlayWhenReady()) {
+                        showControls(fadeDurations);
+                    } else {
+                        showHideShadow(false, fadeDurations, 0);
+                    }
+                }
+
+                @Override
+                public Boolean shouldFastForward(@NotNull final DisplayPortion portion) {
+                    // Null indicates an invalid area or condition e.g. the middle portion
+                    // or video start or end was reached during double tap seeking
+                    if (portion == DisplayPortion.LEFT && checkRewindCondition()) {
+                        return false;
+                    } else if (portion == DisplayPortion.RIGHT && checkForwardCondition()) {
+                        return true;
+                    } else /* portion == DisplayPortion.MIDDLE */ {
+                        return null;
+                    }
+                }
+
+                @Override
+                public void seek(final boolean forward) {
+                    gestureListener.keepInDoubleTapMode();
+                    if (forward) {
+                        onFastForward();
+                    } else {
+                        onFastRewind();
+                    }
+                }
+
+                private boolean checkRewindCondition() {
+                    // Add puffer of a half second, so that direct rewinding is not possible
+                    return getPlayer().getCurrentPosition() > 500L
+                        && getPlayer().getPlaybackState() != Player.STATE_IDLE
+                        && getPlayer().getPlaybackState() != Player.STATE_ENDED;
+                }
+
+                private boolean checkForwardCondition() {
+                    return getPlayer().getCurrentPosition() < getPlayer().getDuration()
+                        && getPlayer().getPlaybackState() != Player.STATE_IDLE
+                        && getPlayer().getPlaybackState() != Player.STATE_ENDED;
+                }
+        });
+        gestureListener.doubleTapControls(seekOverlay);
+    }
+
     @Override
     public void initListeners() {
         super.initListeners();
 
-        final PlayerGestureListener listener = new PlayerGestureListener(this, service);
-        gestureDetector = new GestureDetector(context, listener);
-        getRootView().setOnTouchListener(listener);
+        gestureListener = new PlayerGestureListener(this, service);
+        gestureDetector = new GestureDetector(context, gestureListener);
+        getRootView().setOnTouchListener(gestureListener);
+        setupPlayerSeekOverlay();
 
         queueButton.setOnClickListener(this);
         repeatButton.setOnClickListener(this);
@@ -1203,7 +1299,14 @@ public class VideoPlayerImpl extends VideoPlayer
 
     @Override
     public void onPaused() {
-        super.onPaused();
+        // super.onPaused();
+
+        // Do not show player controls (play/pause, title, ...) during seeking via double tapping
+        if (!gestureListener.isDoubleTapping()) {
+            showControls(400);
+        }
+        getLoadingPanel().setVisibility(View.GONE);
+
         animateView(playPauseButton, AnimationUtils.Type.SCALE_AND_ALPHA, false, 80, 0, () -> {
             playPauseButton.setImageResource(R.drawable.ic_play_arrow_white_24dp);
             animatePlayButtons(true, 200);
@@ -1515,6 +1618,22 @@ public class VideoPlayerImpl extends VideoPlayer
                     showHideShadow(false, duration, 0);
                     animateView(getControlsRoot(), false, duration, 0, this::hideSystemUIIfNeeded);
                 }, delay
+        );
+    }
+
+    public void hideControls(final long duration, final long delay, final boolean keepShadow) {
+        if (DEBUG) {
+            Log.d(TAG, "hideControls() called with: delay = [" + delay + "]");
+        }
+
+        showOrHideButtons();
+
+        getControlsVisibilityHandler().removeCallbacksAndMessages(null);
+        getControlsVisibilityHandler().postDelayed(() -> {
+                showHideTopBottomShadow(false, duration, 0);
+                animateView(getControlsRootShadow(), keepShadow, duration);
+                animateView(getControlsRoot(), false, duration, 0, this::hideSystemUIIfNeeded);
+            }, delay
         );
     }
 
@@ -2180,6 +2299,10 @@ public class VideoPlayerImpl extends VideoPlayer
 
     public MainPlayer.PlayerType getPlayerType() {
         return playerType;
+    }
+
+    public PlayerSeekOverlay getSeekOverlay() {
+        return seekOverlay;
     }
 
     public float getScreenWidth() {
