@@ -53,7 +53,7 @@ import android.widget.ProgressBar;
 import android.widget.RelativeLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
-
+import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
@@ -100,8 +100,11 @@ import org.schabi.newpipe.util.KoreUtil;
 import org.schabi.newpipe.util.ListHelper;
 import org.schabi.newpipe.util.NavigationHelper;
 import org.schabi.newpipe.util.ShareUtils;
+import org.schabi.newpipe.util.SponsorBlockMode;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.schabi.newpipe.player.MainPlayer.ACTION_CLOSE;
 import static org.schabi.newpipe.player.MainPlayer.ACTION_FAST_FORWARD;
@@ -162,6 +165,7 @@ public class VideoPlayerImpl extends VideoPlayer
     private ImageButton playerCloseButton;
     private ImageButton screenRotationButton;
     private ImageButton muteButton;
+    private ImageButton blockSponsorsButton;
 
     private ImageButton playPauseButton;
     private ImageButton playPreviousButton;
@@ -298,6 +302,7 @@ public class VideoPlayerImpl extends VideoPlayer
         this.screenRotationButton = view.findViewById(R.id.screenRotationButton);
         this.playerCloseButton = view.findViewById(R.id.playerCloseButton);
         this.muteButton = view.findViewById(R.id.switchMute);
+        this.blockSponsorsButton = view.findViewById(R.id.switchSponsorBlocking);
 
         this.playPauseButton = view.findViewById(R.id.playPauseButton);
         this.playPreviousButton = view.findViewById(R.id.playPreviousButton);
@@ -363,6 +368,11 @@ public class VideoPlayerImpl extends VideoPlayer
             playWithKodi.setVisibility(View.GONE);
             openInBrowser.setVisibility(View.GONE);
             muteButton.setVisibility(View.GONE);
+
+            if (blockSponsorsButton != null) {
+                blockSponsorsButton.setVisibility(View.GONE);
+            }
+
             playerCloseButton.setVisibility(View.GONE);
             getTopControlsRoot().bringToFront();
             getTopControlsRoot().setClickable(false);
@@ -384,6 +394,13 @@ public class VideoPlayerImpl extends VideoPlayer
             showHideKodiButton();
             openInBrowser.setVisibility(View.VISIBLE);
             muteButton.setVisibility(View.VISIBLE);
+
+            if (blockSponsorsButton != null) {
+                final boolean isSponsorBlockEnabled = mPrefs.getBoolean(
+                        context.getString(R.string.sponsor_block_enable_key), false);
+                blockSponsorsButton.setVisibility(isSponsorBlockEnabled ? View.VISIBLE : View.GONE);
+            }
+
             playerCloseButton.setVisibility(isFullscreen ? View.GONE : View.VISIBLE);
             // Top controls have a large minHeight which is allows to drag the player
             // down in fullscreen mode (just larger area to make easy to locate by finger)
@@ -398,6 +415,7 @@ public class VideoPlayerImpl extends VideoPlayer
             channelTextView.setVisibility(View.VISIBLE);
         }
         setMuteButton(muteButton, isMuted());
+        setBlockSponsorsButton(blockSponsorsButton);
 
         animateRotation(moreOptionsButton, DEFAULT_CONTROLS_DURATION, 0);
     }
@@ -468,6 +486,11 @@ public class VideoPlayerImpl extends VideoPlayer
         openInBrowser.setOnClickListener(this);
         playerCloseButton.setOnClickListener(this);
         muteButton.setOnClickListener(this);
+
+        if (blockSponsorsButton != null) {
+            blockSponsorsButton.setOnClickListener(this);
+            blockSponsorsButton.setOnLongClickListener(this);
+        }
 
         settingsContentObserver = new ContentObserver(new Handler()) {
             @Override
@@ -643,6 +666,8 @@ public class VideoPlayerImpl extends VideoPlayer
 
         showHideKodiButton();
 
+        setBlockSponsorsButton(blockSponsorsButton);
+
         titleTextView.setText(tag.getMetadata().getName());
         channelTextView.setText(tag.getMetadata().getUploaderName());
 
@@ -663,6 +688,25 @@ public class VideoPlayerImpl extends VideoPlayer
         super.onMuteUnmuteButtonClicked();
         updatePlayback();
         setMuteButton(muteButton, isMuted());
+    }
+
+    @Override
+    public void onBlockingSponsorsButtonClicked() {
+        super.onBlockingSponsorsButtonClicked();
+        setBlockSponsorsButton(blockSponsorsButton);
+
+        switch (getSponsorBlockMode()) {
+            case DISABLED:
+                Toast.makeText(context, R.string.sponsor_block_disabled_toast, Toast.LENGTH_SHORT)
+                        .show();
+                break;
+            case ENABLED:
+                Toast.makeText(context, R.string.sponsor_block_enabled_toast, Toast.LENGTH_SHORT)
+                        .show();
+                break;
+            case IGNORE:
+                // ignored
+        }
     }
 
     @Override
@@ -803,6 +847,8 @@ public class VideoPlayerImpl extends VideoPlayer
             }
         } else if (v.getId() == muteButton.getId()) {
             onMuteUnmuteButtonClicked();
+        } else if (blockSponsorsButton != null && v.getId() == blockSponsorsButton.getId()) {
+            onBlockingSponsorsButtonClicked();
         } else if (v.getId() == playerCloseButton.getId()) {
             service.sendBroadcast(new Intent(VideoDetailFragment.ACTION_HIDE_MAIN_PLAYER));
         }
@@ -830,6 +876,45 @@ public class VideoPlayerImpl extends VideoPlayer
             fragmentListener.onMoreOptionsLongClicked();
             hideControls(0, 0);
             hideSystemUIIfNeeded();
+        } else if (blockSponsorsButton != null && v.getId() == blockSponsorsButton.getId()) {
+            final MediaSourceTag currentMetadata = getCurrentMetadata();
+            if (currentMetadata == null) {
+                return true;
+            }
+
+            final Set<String> uploaderWhitelist =
+                    mPrefs.getStringSet(
+                            context.getString(R.string.sponsor_block_whitelist_key),
+                            new HashSet<>());
+
+            final String toastText;
+
+            if (getSponsorBlockMode() == SponsorBlockMode.IGNORE) {
+                if (uploaderWhitelist != null) {
+                    uploaderWhitelist.remove(currentMetadata.getMetadata().getUploaderName());
+                }
+
+                setSponsorBlockMode(SponsorBlockMode.ENABLED);
+                toastText = context
+                        .getString(R.string.sponsor_block_uploader_removed_from_whitelist_toast);
+            } else {
+                if (uploaderWhitelist != null) {
+                    uploaderWhitelist.add(currentMetadata.getMetadata().getUploaderName());
+                }
+
+                setSponsorBlockMode(SponsorBlockMode.IGNORE);
+                toastText = context
+                        .getString(R.string.sponsor_block_uploader_added_to_whitelist_toast);
+            }
+
+            mPrefs.edit()
+                    .putStringSet(
+                            context.getString(R.string.sponsor_block_whitelist_key),
+                            uploaderWhitelist)
+                    .apply();
+
+            setBlockSponsorsButton(blockSponsorsButton);
+            Toast.makeText(context, toastText, Toast.LENGTH_LONG).show();
         }
         return true;
     }
@@ -1486,6 +1571,31 @@ public class VideoPlayerImpl extends VideoPlayer
     protected void setMuteButton(final ImageButton button, final boolean isMuted) {
         button.setImageDrawable(AppCompatResources.getDrawable(service, isMuted
                 ? R.drawable.ic_volume_off_white_24dp : R.drawable.ic_volume_up_white_24dp));
+    }
+
+    protected void setBlockSponsorsButton(final ImageButton button) {
+        if (button == null) {
+            return;
+        }
+
+        final SponsorBlockMode sponsorBlockMode = getSponsorBlockMode();
+        final int resId;
+
+        switch (sponsorBlockMode) {
+            case DISABLED:
+                resId = R.drawable.ic_sponsor_block_disable_white_24dp;
+                break;
+            case ENABLED:
+                resId = R.drawable.ic_sponsor_block_enable_white_24dp;
+                break;
+            case IGNORE:
+                resId = R.drawable.ic_sponsor_block_exclude_white_24dp;
+                break;
+            default:
+                return;
+        }
+
+        button.setImageDrawable(AppCompatResources.getDrawable(service, resId));
     }
 
     /**

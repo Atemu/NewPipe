@@ -42,6 +42,7 @@ import com.google.android.exoplayer2.LoadControl;
 import com.google.android.exoplayer2.PlaybackParameters;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.RenderersFactory;
+import com.google.android.exoplayer2.SeekParameters;
 import com.google.android.exoplayer2.SimpleExoPlayer;
 import com.google.android.exoplayer2.Timeline;
 import com.google.android.exoplayer2.source.BehindLiveWindowException;
@@ -54,9 +55,11 @@ import com.nostra13.universalimageloader.core.ImageLoader;
 import com.nostra13.universalimageloader.core.assist.FailReason;
 import com.nostra13.universalimageloader.core.listener.ImageLoadingListener;
 
+import org.schabi.newpipe.App;
 import org.schabi.newpipe.DownloaderImpl;
 import org.schabi.newpipe.MainActivity;
 import org.schabi.newpipe.R;
+import org.schabi.newpipe.SponsorBlockApiTask;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.local.history.HistoryRecordManager;
 import org.schabi.newpipe.player.helper.AudioReactor;
@@ -74,8 +77,11 @@ import org.schabi.newpipe.player.playqueue.PlayQueueItem;
 import org.schabi.newpipe.player.resolver.MediaSourceTag;
 import org.schabi.newpipe.util.ImageDisplayConstants;
 import org.schabi.newpipe.util.SerializedCache;
+import org.schabi.newpipe.util.SponsorBlockMode;
+import org.schabi.newpipe.util.VideoSegment;
 
 import java.io.IOException;
+import java.util.Set;
 
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
 import io.reactivex.rxjava3.core.Observable;
@@ -108,6 +114,11 @@ public abstract class BasePlayer implements
     public static final int STATE_PAUSED = 126;
     public static final int STATE_PAUSED_SEEK = 127;
     public static final int STATE_COMPLETED = 128;
+
+    @NonNull
+    protected final SharedPreferences mPrefs;
+
+    private VideoSegment[] videoSegments;
 
     /*//////////////////////////////////////////////////////////////////////////
     // Intent
@@ -198,6 +209,7 @@ public abstract class BasePlayer implements
     private Disposable stateLoader;
 
     protected int currentState = STATE_PREFLIGHT;
+    private SponsorBlockMode sponsorBlockMode = SponsorBlockMode.DISABLED;
 
     public BasePlayer(@NonNull final Context context) {
         this.context = context;
@@ -228,6 +240,8 @@ public abstract class BasePlayer implements
 
         this.loadControl = new LoadController();
         this.renderFactory = new DefaultRenderersFactory(context);
+
+        this.mPrefs = PreferenceManager.getDefaultSharedPreferences(App.getApp());
     }
 
     public void setup() {
@@ -693,6 +707,31 @@ public abstract class BasePlayer implements
         return simpleExoPlayer.getVolume() == 0;
     }
 
+    public void onBlockingSponsorsButtonClicked() {
+        if (DEBUG) {
+            Log.d(TAG, "onBlockingSponsorsButtonClicked() called");
+        }
+
+        switch (sponsorBlockMode) {
+            case DISABLED:
+                sponsorBlockMode = SponsorBlockMode.ENABLED;
+                break;
+            case ENABLED:
+                sponsorBlockMode = SponsorBlockMode.DISABLED;
+                break;
+            case IGNORE:
+                // ignored
+        }
+    }
+
+    public SponsorBlockMode getSponsorBlockMode() {
+        return sponsorBlockMode;
+    }
+
+    public void setSponsorBlockMode(final SponsorBlockMode mode) {
+        sponsorBlockMode = mode;
+    }
+
     /*//////////////////////////////////////////////////////////////////////////
     // Progress Updates
     //////////////////////////////////////////////////////////////////////////*/
@@ -708,14 +747,101 @@ public abstract class BasePlayer implements
     }
 
     public void triggerProgressUpdate() {
+        triggerProgressUpdate(false);
+    }
+
+    public void triggerProgressUpdate(final boolean isRewind) {
         if (simpleExoPlayer == null) {
             return;
         }
+        final int currentProgress = Math.max((int) simpleExoPlayer.getCurrentPosition(), 0);
         onUpdateProgress(
-                Math.max((int) simpleExoPlayer.getCurrentPosition(), 0),
+                currentProgress,
                 (int) simpleExoPlayer.getDuration(),
                 simpleExoPlayer.getBufferedPercentage()
         );
+
+        if (sponsorBlockMode == SponsorBlockMode.ENABLED) {
+            final VideoSegment segment = getSkippableSegment(currentProgress);
+            if (segment == null) {
+                return;
+            }
+
+            int skipTarget = isRewind
+                    ? (int) Math.ceil((segment.startTime)) - 1
+                    : (int) Math.ceil((segment.endTime));
+
+            if (skipTarget < 0) {
+                skipTarget = 0;
+            }
+
+            // temporarily force EXACT seek parameters to prevent infinite skip looping
+            final SeekParameters seekParams = simpleExoPlayer.getSeekParameters();
+            simpleExoPlayer.setSeekParameters(SeekParameters.EXACT);
+
+            seekTo(skipTarget);
+
+            simpleExoPlayer.setSeekParameters(seekParams);
+
+            if (mPrefs.getBoolean(
+                    context.getString(R.string.sponsor_block_notifications_key), false)) {
+                String toastText = "";
+
+                switch (segment.category) {
+                    case "sponsor":
+                        toastText = context
+                                .getString(R.string.sponsor_block_skip_sponsor_toast);
+                        break;
+                    case "intro":
+                        toastText = context
+                                .getString(R.string.sponsor_block_skip_intro_toast);
+                        break;
+                    case "outro":
+                        toastText = context
+                                .getString(R.string.sponsor_block_skip_outro_toast);
+                        break;
+                    case "interaction":
+                        toastText = context
+                                .getString(R.string.sponsor_block_skip_interaction_toast);
+                        break;
+                    case "selfpromo":
+                        toastText = context
+                                .getString(R.string.sponsor_block_skip_self_promo_toast);
+                        break;
+                    case "music_offtopic":
+                        toastText = context
+                                .getString(R.string.sponsor_block_skip_non_music_toast);
+                        break;
+                }
+
+                Toast.makeText(context, toastText, Toast.LENGTH_SHORT).show();
+            }
+
+            if (DEBUG) {
+                Log.d("SPONSOR_BLOCK", "Skipped segment: currentProgress = ["
+                        + currentProgress + "], skipped to = [" + skipTarget + "]");
+            }
+        }
+    }
+
+    public VideoSegment getSkippableSegment(final int progress) {
+        if (videoSegments == null) {
+            return null;
+        }
+
+        for (final VideoSegment segment : videoSegments) {
+            if (progress < segment.startTime) {
+                continue;
+            }
+
+            if (progress > segment.endTime) {
+                continue;
+            }
+
+            return segment;
+        }
+
+        return null;
     }
 
     private Disposable getProgressReactor() {
@@ -1078,6 +1204,73 @@ public abstract class BasePlayer implements
 
         initThumbnail(info.getThumbnailUrl());
         registerView();
+
+        final boolean isSponsorBlockEnabled = mPrefs.getBoolean(
+                context.getString(R.string.sponsor_block_enable_key), false);
+        final Set<String> uploaderWhitelist = mPrefs.getStringSet(
+                context.getString(R.string.sponsor_block_whitelist_key), null);
+
+        if (uploaderWhitelist != null && uploaderWhitelist.contains(info.getUploaderName())) {
+            sponsorBlockMode = SponsorBlockMode.IGNORE;
+        } else {
+            sponsorBlockMode = isSponsorBlockEnabled
+                    ? SponsorBlockMode.ENABLED
+                    : SponsorBlockMode.DISABLED;
+        }
+
+        if (info.getUrl().startsWith("https://www.youtube.com")) {
+            final String apiUrl = mPrefs
+                    .getString(context.getString(R.string.sponsor_block_api_url_key), null);
+
+            if (apiUrl != null && !apiUrl.isEmpty() && isSponsorBlockEnabled) {
+                try {
+                   final boolean includeSponsorCategory =
+                            mPrefs.getBoolean(
+                                    context.getString(
+                                            R.string.sponsor_block_category_sponsor_key),
+                                    false);
+
+                   final boolean includeIntroCategory =
+                            mPrefs.getBoolean(
+                                    context.getString(
+                                            R.string.sponsor_block_category_intro_key),
+                                    false);
+
+                   final boolean includeOutroCategory =
+                            mPrefs.getBoolean(
+                                    context.getString(
+                                            R.string.sponsor_block_category_outro_key),
+                                    false);
+
+                    final boolean includeInteractionCategory =
+                            mPrefs.getBoolean(
+                                    context.getString(
+                                            R.string.sponsor_block_category_interaction_key),
+                                    false);
+                    final boolean includeSelfPromoCategory =
+                            mPrefs.getBoolean(
+                                    context.getString(
+                                            R.string.sponsor_block_category_self_promo_key),
+                                    false);
+                    final boolean includeMusicCategory =
+                            mPrefs.getBoolean(
+                                    context.getString(
+                                            R.string.sponsor_block_category_non_music_key),
+                                    false);
+
+                    videoSegments = new SponsorBlockApiTask(apiUrl)
+                            .getYouTubeVideoSegments(info.getId(),
+                                    includeSponsorCategory,
+                                    includeIntroCategory,
+                                    includeOutroCategory,
+                                    includeInteractionCategory,
+                                    includeSelfPromoCategory,
+                                    includeMusicCategory);
+                } catch (final Exception e) {
+                    Log.e("SPONSOR_BLOCK", "Error getting YouTube video segments.", e);
+                }
+            }
+        }
     }
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -1177,7 +1370,7 @@ public abstract class BasePlayer implements
             Log.d(TAG, "onFastRewind() called");
         }
         seekBy(-getSeekDuration());
-        triggerProgressUpdate();
+        triggerProgressUpdate(true);
     }
 
     public void onFastForward() {
@@ -1624,5 +1817,9 @@ public abstract class BasePlayer implements
         final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         return prefs.getBoolean(context.getString(R.string.enable_watch_history_key), true)
                 && prefs.getBoolean(context.getString(R.string.enable_playback_resume_key), true);
+    }
+
+    public VideoSegment[] getVideoSegments() {
+        return videoSegments;
     }
 }

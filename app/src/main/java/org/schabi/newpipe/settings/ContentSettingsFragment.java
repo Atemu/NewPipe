@@ -5,8 +5,10 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.View;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -39,6 +41,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.zip.ZipFile;
@@ -96,22 +99,26 @@ public class ContentSettingsFragment extends BasePreferenceFragment {
 
     @Override
     public boolean onPreferenceTreeClick(final Preference preference) {
-        if (preference.getKey().equals(thumbnailLoadToggleKey)) {
-            final ImageLoader imageLoader = ImageLoader.getInstance();
-            imageLoader.stop();
-            imageLoader.clearDiskCache();
-            imageLoader.clearMemoryCache();
-            imageLoader.resume();
-            Toast.makeText(preference.getContext(), R.string.thumbnail_cache_wipe_complete_notice,
-                    Toast.LENGTH_SHORT).show();
-        }
+        final String key = preference.getKey();
+        if (key != null) {
+            if (key.equals(thumbnailLoadToggleKey)) {
+                final ImageLoader imageLoader = ImageLoader.getInstance();
+                imageLoader.stop();
+                imageLoader.clearDiskCache();
+                imageLoader.clearMemoryCache();
+                imageLoader.resume();
+                Toast.makeText(preference.getContext(),
+                        R.string.thumbnail_cache_wipe_complete_notice,
+                        Toast.LENGTH_SHORT).show();
+            }
 
-        if (preference.getKey().equals(youtubeRestrictedModeEnabledKey)) {
-            final Context context = getContext();
-            if (context != null) {
-                DownloaderImpl.getInstance().updateYoutubeRestrictedModeCookies(context);
-            } else {
-                Log.w(TAG, "onPreferenceTreeClick: null context");
+            if (key.equals(youtubeRestrictedModeEnabledKey)) {
+                final Context context = getContext();
+                if (context != null) {
+                    DownloaderImpl.getInstance().updateYoutubeRestrictedModeCookies(context);
+                } else {
+                    Log.w(TAG, "onPreferenceTreeClick: null context");
+                }
             }
         }
 
@@ -154,6 +161,59 @@ public class ContentSettingsFragment extends BasePreferenceFragment {
             startActivityForResult(i, REQUEST_EXPORT_PATH);
             return true;
         });
+
+        final Preference sponsorBlockWebsitePreference =
+                findPreference(getString(R.string.sponsor_block_home_page_key));
+        sponsorBlockWebsitePreference.setOnPreferenceClickListener((Preference p) -> {
+            final Intent i = new Intent(Intent.ACTION_VIEW,
+                    Uri.parse(getString(R.string.sponsor_block_homepage_url)));
+            startActivity(i);
+            return true;
+        });
+
+        final Preference sponsorBlockPrivacyPreference =
+                findPreference(getString(R.string.sponsor_block_privacy_key));
+        sponsorBlockPrivacyPreference.setOnPreferenceClickListener((Preference p) -> {
+            final Intent i = new Intent(Intent.ACTION_VIEW,
+                    Uri.parse(getString(R.string.sponsor_block_privacy_policy_url)));
+            startActivity(i);
+            return true;
+        });
+
+        final Preference sponsorBlockApiUrlPreference =
+                findPreference(getString(R.string.sponsor_block_api_url_key));
+        sponsorBlockApiUrlPreference
+                .setOnPreferenceChangeListener((preference, newValue) -> {
+                    updateDependencies(preference, newValue);
+                    return true;
+                });
+
+        final Preference sponsorBlockClearWhitelistPreference =
+                findPreference(getString(R.string.sponsor_block_clear_whitelist_key));
+        sponsorBlockClearWhitelistPreference.setOnPreferenceClickListener((Preference p) -> {
+            getPreferenceManager()
+                    .getSharedPreferences()
+                    .edit()
+                    .putStringSet(
+                            getString(R.string.sponsor_block_whitelist_key), new HashSet<>())
+                    .apply();
+            Toast.makeText(getContext(), R.string.sponsor_block_whitelist_cleared_toast,
+                    Toast.LENGTH_SHORT).show();
+            return true;
+        });
+    }
+
+    @Override
+    public void onViewCreated(final View view, @Nullable final Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+
+        final Preference sponsorBlockApiUrlPreference =
+                findPreference(getString(R.string.sponsor_block_api_url_key));
+        final String sponsorBlockApiUrlPreferenceValue =
+                getPreferenceManager()
+                        .getSharedPreferences()
+                        .getString(getString(R.string.sponsor_block_api_url_key), null);
+        updateDependencies(sponsorBlockApiUrlPreference, sponsorBlockApiUrlPreferenceValue);
     }
 
     @Override
@@ -241,7 +301,8 @@ public class ContentSettingsFragment extends BasePreferenceFragment {
 
     private void importDatabase(final String filePath) {
         // check if file is supported
-        try (ZipFile zipFile = new ZipFile(filePath)) {
+        try {
+            new ZipFile(filePath);
         } catch (final IOException ioe) {
             Toast.makeText(getContext(), R.string.no_valid_zip_file, Toast.LENGTH_SHORT)
                     .show();
@@ -317,6 +378,26 @@ public class ContentSettingsFragment extends BasePreferenceFragment {
             prefEdit.commit();
         } catch (final IOException | ClassNotFoundException e) {
             e.printStackTrace();
+        }
+    }
+
+    private void updateDependencies(final Preference preference, final Object newValue) {
+        // This is a workaround to force dependency updates for custom preferences.
+
+        // sponsor_block_api_url_key
+        if (preference.getKey().equals(getString(R.string.sponsor_block_api_url_key))) {
+            findPreference(getString(R.string.sponsor_block_enable_key))
+                    .onDependencyChanged(preference,
+                            newValue == null || newValue.equals(""));
+            findPreference(getString(R.string.sponsor_block_notifications_key))
+                    .onDependencyChanged(preference,
+                            newValue == null || newValue.equals(""));
+            findPreference(getString(R.string.sponsor_block_categories_key))
+                    .onDependencyChanged(preference,
+                            newValue == null || newValue.equals(""));
+            findPreference(getString(R.string.sponsor_block_clear_whitelist_key))
+                    .onDependencyChanged(preference,
+                            newValue == null || newValue.equals(""));
         }
     }
 
