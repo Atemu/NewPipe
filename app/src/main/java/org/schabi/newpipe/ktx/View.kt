@@ -11,6 +11,7 @@ import android.util.Log
 import android.view.View
 import androidx.annotation.ColorInt
 import androidx.annotation.FloatRange
+import androidx.core.animation.addListener
 import androidx.core.view.ViewCompat
 import androidx.core.view.isGone
 import androidx.core.view.isInvisible
@@ -113,15 +114,10 @@ fun View.animateBackgroundColor(duration: Long, @ColorInt colorStart: Int, @Colo
     viewPropertyAnimator.addUpdateListener { animation: ValueAnimator ->
         backgroundTintListCompat = ColorStateList(empty, intArrayOf(animation.animatedValue as Int))
     }
-    viewPropertyAnimator.addListener(object : AnimatorListenerAdapter() {
-        override fun onAnimationEnd(animation: Animator) {
-            backgroundTintListCompat = ColorStateList(empty, intArrayOf(colorEnd))
-        }
-
-        override fun onAnimationCancel(animation: Animator) {
-            onAnimationEnd(animation)
-        }
-    })
+    viewPropertyAnimator.addListener(
+        onCancel = { backgroundTintListCompat = ColorStateList(empty, intArrayOf(colorEnd)) },
+        onEnd = { backgroundTintListCompat = ColorStateList(empty, intArrayOf(colorEnd)) }
+    )
     viewPropertyAnimator.start()
 }
 
@@ -141,17 +137,16 @@ fun View.animateHeight(duration: Long, targetHeight: Int): ValueAnimator {
         layoutParams.height = value.toInt()
         requestLayout()
     }
-    animator.addListener(object : AnimatorListenerAdapter() {
-        override fun onAnimationEnd(animation: Animator) {
+    animator.addListener(
+        onCancel = {
+            layoutParams.height = targetHeight
+            requestLayout()
+        },
+        onEnd = {
             layoutParams.height = targetHeight
             requestLayout()
         }
-
-        override fun onAnimationCancel(animation: Animator) {
-            layoutParams.height = targetHeight
-            requestLayout()
-        }
-    })
+    )
     animator.start()
     return animator
 }
