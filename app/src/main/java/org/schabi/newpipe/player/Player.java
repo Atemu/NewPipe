@@ -1763,7 +1763,7 @@ public final class Player implements
                 simpleExoPlayer.getBufferedPercentage()
         );
 
-        if (sponsorBlockMode == SponsorBlockMode.ENABLED) {
+        if (sponsorBlockMode == SponsorBlockMode.ENABLED && isPrepared) {
             final VideoSegment segment = getSkippableSegment(currentProgress);
             if (segment == null) {
                 lastSkipTarget = -1;
